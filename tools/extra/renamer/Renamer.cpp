@@ -158,11 +158,8 @@ public:
     virtual void run(const MatchFinder::MatchResult &Result)
     {
         const CXXMethodDecl *D = Result.Nodes.getDeclAs<CXXMethodDecl>("method");
-        // We can assume D is non-null, because the ast matchers guarantee
-        // that a node with this type was bound, as the matcher would otherwise
-        // not match.
 
-        cout << "DeclRenamer" << endl;
+
 
         // Replace->insert(
         //     // Replacements are a source manager independent way to express
@@ -196,8 +193,7 @@ int main(int argc, const char **argv) {
     CallRenamer CallCallback(&Tool.getReplacements());
     Finder.addMatcher(
         memberExpr(
-            // Where the callee is a method called "Get"...
-            anything()  ,
+            unless(memberCallExpr(anything()))  ,
             id( "member" , memberExpr() ) ) ,
         &CallCallback );
 
