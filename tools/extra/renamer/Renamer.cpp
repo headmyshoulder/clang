@@ -46,21 +46,79 @@ public:
 
     // This method is called every time the registered matcher matches
     // on the AST.
-    virtual void run(const MatchFinder::MatchResult &Result)
+    virtual void run(const MatchFinder::MatchResult &result)
     {
-        const MemberExpr *M = Result.Nodes.getStmtAs<MemberExpr>("member");
-        // We can assume M is non-null, because the ast matchers guarantee
-        // that a node with this type was bound, as the matcher would otherwise
-        // not match.
-
         cout << "CallRenamer" << endl;
-        SourceManager &sm = ( *Result.SourceManager );
-        for( SourceManager::fileinfo_iterator iter = sm.fileinfo_begin() ; iter != sm.fileinfo_end() ; ++iter )
+
+        SourceManager &sm = ( *result.SourceManager );
+
+        const MemberExpr *mExpr = result.Nodes.getStmtAs<MemberExpr>("member");
+        SourceLocation mlog = mExpr->getMemberLoc();
+
+        clang::FullSourceLoc fsl( mlog , sm );
+        std::string filename = "AAA";
+        if( fsl.isValid() )
         {
-            const FileEntry &entry = *( iter->first );
-            cout << entry.getName() << " " << entry.getDir() << "\n";
+            const clang::FileEntry *fe = sm.getFileEntryForID( fsl.getFileID() );
+            if( !fe )
+            {
+                SourceLocation sl = sm.getSpellingLoc(mlog);
+                if( sl.isValid() )
+                {
+                    clang::FullSourceLoc fsl2(sl, sm);
+                    const clang::FileEntry *fe2 = sm.getFileEntryForID( fsl2.getFileID() );
+                    if( fe2 )
+                        filename = std::string( "XXX: " ) + fe2->getName();
+                    else
+                        filename = "DDD";
+                }
+                else
+                {
+                    filename = "CCC";
+                }
+            }
+            else
+            {
+                filename = std::string( "YYY" ) + fe->getName();
+            }
         }
-        cout << "endfiles" << endl;
+        else
+        {
+            SourceLocation sl = sm.getSpellingLoc(mlog);
+            if( sl.isValid() )
+            {
+                clang::FullSourceLoc fsl2(sl, sm);
+                const clang::FileEntry *fe2 = sm.getFileEntryForID( fsl2.getFileID() );
+                filename = std::string( "ZZZ" ) + fe2->getName();
+            }
+            else
+            {
+                filename = "BBB";
+            }
+        }
+
+
+        
+        // FileID fid = sm.getFileID( M->getMemberLoc() );
+        
+
+
+
+
+        DeclarationNameInfo dnInfo = mExpr->getMemberNameInfo();
+        cout << "Variablenname : " << dnInfo.getName().getAsString() << " ";
+        cout << "Filename : " << filename;
+        cout << "\n";
+        
+
+
+        
+        // for( SourceManager::fileinfo_iterator iter = sm.fileinfo_begin() ; iter != sm.fileinfo_end() ; ++iter )
+        // {
+        //     const FileEntry &entry = *( iter->first );
+        //     cout << entry.getName() << " " << entry.getDir() << "\n";
+        // }
+        // cout << "endfiles" << endl;
         
 
         
@@ -68,15 +126,15 @@ public:
 
         // USE *Result.SourceManager.fileinfo_begin()
 
-        Replace->insert(
-            // Replacements are a source manager independent way to express
-            // transformation on the source.
-            Replacement(*Result.SourceManager,
-                        // Replace the range of the member name...
-                        CharSourceRange::getTokenRange(
-                            SourceRange(M->getMemberLoc())),
-                        // ... with "Front".
-                        "Front"));
+        // Replace->insert(
+        //     // Replacements are a source manager independent way to express
+        //     // transformation on the source.
+        //     Replacement(*Result.SourceManager,
+        //                 // Replace the range of the member name...
+        //                 CharSourceRange::getTokenRange(
+        //                     SourceRange(M->getMemberLoc())),
+        //                 // ... with "Front".
+        //                 "Front"));
     }
 
 private:
@@ -106,15 +164,15 @@ public:
 
         cout << "DeclRenamer" << endl;
 
-        Replace->insert(
-            // Replacements are a source manager independent way to express
-            // transformation on the source.
-            Replacement(*Result.SourceManager,
-                        // Replace the range of the declarator identifier...
-                        CharSourceRange::getTokenRange(
-                            SourceRange(D->getLocation())),
-                        // ... with "Front".
-                        "Front"));
+        // Replace->insert(
+        //     // Replacements are a source manager independent way to express
+        //     // transformation on the source.
+        //     Replacement(*Result.SourceManager,
+        //                 // Replace the range of the declarator identifier...
+        //                 CharSourceRange::getTokenRange(
+        //                     SourceRange(D->getLocation())),
+        //                 // ... with "Front".
+        //                 "Front"));
     }
 
 private:
@@ -137,16 +195,10 @@ int main(int argc, const char **argv) {
     ast_matchers::MatchFinder Finder;
     CallRenamer CallCallback(&Tool.getReplacements());
     Finder.addMatcher(
-        // Match calls...
-        memberCallExpr(
+        memberExpr(
             // Where the callee is a method called "Get"...
-            callee( methodDecl( hasName( "_uebergangsfunktion") ) ),
-            // ... and the class on which the method is called is derived
-            // from ElementsBase ...
-            thisPointerType( recordDecl( isDerivedFrom( "ITransition" ) ) ) ,
-            // ... and bind the member expression to the ID "member", under which
-            // it can later be found in the callback.
-            callee( id( "member" , memberExpr() ) ) ),
+            anything()  ,
+            id( "member" , memberExpr() ) ) ,
         &CallCallback );
 
     DeclRenamer DeclCallback( &Tool.getReplacements() );
