@@ -3,19 +3,7 @@
  * Date: 2012-10-24
  * Author: Karsten Ahnert (karsten.ahnert@gmx.de)
  */
-//=- examples/rename-method/RenameMethod.cpp ------------------------------===//
-//
-//                     The LLVM Compiler Infrastructure
-//
-// This file is distributed under the University of Illinois Open Source
-// License. See LICENSE.TXT for details.
-//
-//===----------------------------------------------------------------------===//
-//
-// A small example tool that uses AST matchers to find calls to the Get() method
-// in subclasses of ElementsBase and replaces them with calls to Front().
-//
-//===----------------------------------------------------------------------===//
+
 
 #include <clang/ASTMatchers/ASTMatchers.h>
 #include <clang/ASTMatchers/ASTMatchFinder.h>
@@ -32,153 +20,158 @@ using namespace clang::ast_matchers;
 using namespace clang::tooling;
 using namespace llvm;
 
-
 using namespace std;
 
-// Implements a callback that replaces the calls for the AST
-// nodes we matched.
-class CallRenamer : public MatchFinder::MatchCallback
+
+std::string getFilenameFromLocation( SourceLocation mloc , SourceManager &sm )
 {
-public:
-
-    CallRenamer(Replacements *Replace)
-        : Replace(Replace) {}
-
-    // This method is called every time the registered matcher matches
-    // on the AST.
-    virtual void run(const MatchFinder::MatchResult &result)
+    clang::FullSourceLoc fsl( mloc , sm );
+    std::string filename = "AAA";
+    if( fsl.isValid() )
     {
-        cout << "CallRenamer" << endl;
-
-        SourceManager &sm = ( *result.SourceManager );
-
-        const MemberExpr *mExpr = result.Nodes.getStmtAs<MemberExpr>("member");
-        SourceLocation mlog = mExpr->getMemberLoc();
-
-        clang::FullSourceLoc fsl( mlog , sm );
-        std::string filename = "AAA";
-        if( fsl.isValid() )
+        const clang::FileEntry *fe = sm.getFileEntryForID( fsl.getFileID() );
+        if( !fe )
         {
-            const clang::FileEntry *fe = sm.getFileEntryForID( fsl.getFileID() );
-            if( !fe )
-            {
-                SourceLocation sl = sm.getSpellingLoc(mlog);
-                if( sl.isValid() )
-                {
-                    clang::FullSourceLoc fsl2(sl, sm);
-                    const clang::FileEntry *fe2 = sm.getFileEntryForID( fsl2.getFileID() );
-                    if( fe2 )
-                        filename = std::string( "XXX: " ) + fe2->getName();
-                    else
-                        filename = "DDD";
-                }
-                else
-                {
-                    filename = "CCC";
-                }
-            }
-            else
-            {
-                filename = std::string( "YYY" ) + fe->getName();
-            }
-        }
-        else
-        {
-            SourceLocation sl = sm.getSpellingLoc(mlog);
+            SourceLocation sl = sm.getSpellingLoc(mloc);
             if( sl.isValid() )
             {
                 clang::FullSourceLoc fsl2(sl, sm);
                 const clang::FileEntry *fe2 = sm.getFileEntryForID( fsl2.getFileID() );
-                filename = std::string( "ZZZ" ) + fe2->getName();
+                if( fe2 )
+                    filename = std::string( "XXX: " ) + fe2->getName();
+                else
+                    filename = "DDD";
             }
             else
             {
-                filename = "BBB";
+                filename = "CCC";
+            }
+        }
+        else
+        {
+            filename = std::string( "YYY" ) + fe->getName();
+        }
+    }
+    else
+    {
+        SourceLocation sl = sm.getSpellingLoc(mloc);
+        if( sl.isValid() )
+        {
+            clang::FullSourceLoc fsl2(sl, sm);
+            const clang::FileEntry *fe2 = sm.getFileEntryForID( fsl2.getFileID() );
+            filename = std::string( "ZZZ" ) + fe2->getName();
+        }
+        else
+        {
+            filename = "BBB";
+        }
+    }
+    return filename;
+}
+
+
+class RenamerContext
+{
+public:
+
+    RenamerContext( const std::string &basePath )
+        :m_basePath( basePath )
+    { }
+
+    bool isMemberVariableExpr( const MemberExpr *mExpr ) const
+    {
+        const ValueDecl* valDecl = mExpr->getMemberDecl();
+        const FieldDecl* fieldDecl = dynamic_cast< const FieldDecl* >( valDecl );
+        return ( fieldDecl != 0 );
+    }
+
+    bool isValidExprSource( const MemberExpr *mExpr , SourceManager &sm ) const
+    {
+        std::string exprFilename = sm.getFilename( mExpr->getMemberLoc() ).str();
+        std::string declFilename = sm.getFilename( mExpr->getMemberDecl()->getLocation() ).str();
+        // cout << exprFilename << "\n" << declFilename << "\n" << m_basePath << " " << "\n";
+        // cout << exprFilename.find( m_basePath ) << "\n";
+        if( ( exprFilename.find( m_basePath ) == 1 ) && ( declFilename.find( m_basePath ) == 1 ) ) return true;
+        else return false;
+    }
+
+    bool isNotPublic( const MemberExpr *mExpr ) const
+    {
+        const ValueDecl* valDecl = mExpr->getMemberDecl();
+        AccessSpecifier ac = valDecl->getAccess();
+        if( ( ac ==  AS_private ) || ( ac == AS_protected ) ) return true;
+        else return false;
+    }
+
+    bool isCorrectFormatted( const std::string &name )
+    {
+        if( name.size() < 2 ) return false;
+        if( name[ name.size() - 1 ] != '_' ) return false;
+        if( !std::islower( name[0] ) ) return false;
+        return true;
+    }
+
+    std::string getCorrectFormatedVariable( std::string name )
+    {
+        if( !std::islower( name[0] ) ) name[0] = std::tolower( name[0] );
+        if( name[ name.size() - 1] != '_' ) name += '_';
+        return name;
+    }
+
+private:
+
+    std::string m_basePath;
+};
+
+
+class CallRenamer : public MatchFinder::MatchCallback
+{
+public:
+
+    CallRenamer( Replacements *Replace , RenamerContext &context ) : Replace(Replace) , m_context( context ) {}
+
+    virtual void run(const MatchFinder::MatchResult &result)
+    {
+        SourceManager &sm = ( *result.SourceManager );
+        const MemberExpr *mExpr = result.Nodes.getStmtAs<MemberExpr>("member");
+
+        DeclarationNameInfo dnInfo = mExpr->getMemberNameInfo();
+        std::string name = dnInfo.getName().getAsString();
+
+        if( m_context.isMemberVariableExpr( mExpr ) )
+        {
+            if( m_context.isNotPublic( mExpr ) )
+            {
+                if( m_context.isValidExprSource( mExpr , sm ) )
+                {
+                    if( !m_context.isCorrectFormatted( name ) )
+                    {
+                        std::string suggestion = m_context.getCorrectFormatedVariable( name )
+                        cout << "\t" << sm.getFilename( mExpr->getMemberLoc() ).str() << " : "
+                             << name << ", Vorschlag " << suggestion << "\n";
+
+                        
+                        // Replace->insert( Replacement( sm ,
+                        //                               CharSourceRange::getTokenRange( SourceRange( mExpr->getMemberLoc() ) ) ,
+                        //                               suggestion.c_str() )
+                        //     );
+
+                    }
+                }
             }
         }
 
 
-        
-        // FileID fid = sm.getFileID( M->getMemberLoc() );
-        
-
-
-
-
-        DeclarationNameInfo dnInfo = mExpr->getMemberNameInfo();
-        cout << "Variablenname : " << dnInfo.getName().getAsString() << " ";
-        cout << "Filename : " << filename;
-        cout << "\n";
-        
-
-
-        
-        // for( SourceManager::fileinfo_iterator iter = sm.fileinfo_begin() ; iter != sm.fileinfo_end() ; ++iter )
-        // {
-        //     const FileEntry &entry = *( iter->first );
-        //     cout << entry.getName() << " " << entry.getDir() << "\n";
-        // }
-        // cout << "endfiles" << endl;
-        
-
-        
-
-
-        // USE *Result.SourceManager.fileinfo_begin()
-
-        // Replace->insert(
-        //     // Replacements are a source manager independent way to express
-        //     // transformation on the source.
-        //     Replacement(*Result.SourceManager,
-        //                 // Replace the range of the member name...
-        //                 CharSourceRange::getTokenRange(
-        //                     SourceRange(M->getMemberLoc())),
-        //                 // ... with "Front".
-        //                 "Front"));
     }
 
 private:
 
-    // Replacements are the RefactoringTool's way to keep track of code
-    // transformations, deduplicate them and apply them to the code when
-    // the tool has finished with all translation units.
     Replacements *Replace;
+    RenamerContext &m_context;
 };
 
-// Implements a callback that replaces the decls for the AST
-// nodes we matched.
-class DeclRenamer : public MatchFinder::MatchCallback
-{
-public:
-
-    DeclRenamer(Replacements *Replace) : Replace(Replace) {}
-
-    // This method is called every time the registered matcher matches
-    // on the AST.
-    virtual void run(const MatchFinder::MatchResult &Result)
-    {
-        const CXXMethodDecl *D = Result.Nodes.getDeclAs<CXXMethodDecl>("method");
 
 
-
-        // Replace->insert(
-        //     // Replacements are a source manager independent way to express
-        //     // transformation on the source.
-        //     Replacement(*Result.SourceManager,
-        //                 // Replace the range of the declarator identifier...
-        //                 CharSourceRange::getTokenRange(
-        //                     SourceRange(D->getLocation())),
-        //                 // ... with "Front".
-        //                 "Front"));
-    }
-
-private:
-    // Replacements are the RefactoringTool's way to keep track of code
-    // transformations, deduplicate them and apply them to the code when
-    // the tool has finished with all translation units.
-    Replacements *Replace;
-
-};
 
 int main(int argc, const char **argv) {
 
@@ -189,20 +182,17 @@ int main(int argc, const char **argv) {
 
 
     RefactoringTool Tool( *Compilations , Compilations->getAllFiles() );
+    RenamerContext renamerContext( "home/karsten/tc-supertoll/trunk/src/SuperToll" );
     ast_matchers::MatchFinder Finder;
-    CallRenamer CallCallback(&Tool.getReplacements());
+    CallRenamer CallCallback( &Tool.getReplacements() , renamerContext );
     Finder.addMatcher(
         memberExpr(
             unless(memberCallExpr(anything()))  ,
             id( "member" , memberExpr() ) ) ,
         &CallCallback );
 
-    DeclRenamer DeclCallback( &Tool.getReplacements() );
-    Finder.addMatcher(
-        // Match declarations...
-        id("method", methodDecl(hasName("_uebergangsfunktion"),
-                                ofClass( isDerivedFrom( "ITransition" ) ) ) ) ,
-        &DeclCallback);
+    // ToDo : add an Matcher for the declarations
+
 
     return Tool.run(newFrontendActionFactory(&Finder));
 }
